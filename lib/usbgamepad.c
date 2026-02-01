@@ -109,7 +109,7 @@ void USBGamePadDevice (TUSBGamePadDevice *pThis, TUSBFunction *pDevice)
     pThis->m_State.nbuttons = 0;
     pThis->m_State.buttons = 0;
 
-	pThis->m_pReportBuffer = malloc (64);
+	pThis->m_pReportBuffer = dma_malloc (64);
 	assert (pThis->m_pReportBuffer != 0);
 }
 
@@ -125,7 +125,7 @@ void _CUSBGamePadDevice (TUSBGamePadDevice *pThis)
 
 	if (pThis->m_pReportBuffer != 0)
 	{
-		free (pThis->m_pReportBuffer);
+		dma_free (pThis->m_pReportBuffer);
 		pThis->m_pReportBuffer = 0;
 	}
 

@@ -59,7 +59,7 @@ void _CUSBMIDIDevice (TUSBMIDIDevice *pThis)
 
 	if (pThis->m_pPacketBuffer != 0)
 	{
-		free (pThis->m_pPacketBuffer);
+		dma_free (pThis->m_pPacketBuffer);
 		pThis->m_pPacketBuffer = 0;
 	}
 
@@ -116,7 +116,7 @@ boolean USBMIDIDeviceConfigure (TUSBFunction *pUSBFunction)
 		pThis->m_usBufferSize = pEndpointDesc->wMaxPacketSize;
 		pThis->m_usBufferSize -= pEndpointDesc->wMaxPacketSize % EVENT_PACKET_SIZE;
 		assert (pThis->m_pPacketBuffer == 0);
-		pThis->m_pPacketBuffer = malloc (pThis->m_usBufferSize);
+		pThis->m_pPacketBuffer = dma_malloc (pThis->m_usBufferSize);
 		assert (pThis->m_pPacketBuffer != 0);
 
 		USBEndpoint2 (pThis->m_pEndpointIn, USBFunctionGetDevice (&pThis->m_USBFunction), (TUSBEndpointDescriptor *) pEndpointDesc);

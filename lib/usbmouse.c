@@ -43,7 +43,7 @@ void USBMouseDevice (TUSBMouseDevice *pThis, TUSBFunction *pDevice)
 	pThis->m_pStatusHandler = 0;
 	pThis->m_pReportBuffer = 0;
 
-	pThis->m_pReportBuffer = malloc (MOUSE_BOOT_REPORT_SIZE);
+	pThis->m_pReportBuffer = dma_malloc (MOUSE_BOOT_REPORT_SIZE);
 	assert (pThis->m_pReportBuffer != 0);
 
 	pThis->m_pHIDReportDescriptor = 0;
@@ -61,7 +61,7 @@ void _CUSBMouseDevice (TUSBMouseDevice *pThis)
 
 	if (pThis->m_pReportBuffer != 0)
 	{
-		free (pThis->m_pReportBuffer);
+		dma_free (pThis->m_pReportBuffer);
 		pThis->m_pReportBuffer = 0;
 	}
 

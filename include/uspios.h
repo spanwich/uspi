@@ -55,6 +55,17 @@ extern "C" {
 void *malloc (unsigned nSize);		// result must be 4-byte aligned
 void free (void *pBlock);
 
+// DMA-capable allocation for buffers that reach hardware DMA engines.
+// On seL4/CAmkES these come from a dedicated DMA pool with known PA.
+// On bare metal these alias to regular malloc/free.
+#ifdef SEL4_CAMKES
+void *dma_malloc (unsigned nSize);
+void dma_free (void *pBlock);
+#else
+#define dma_malloc(n) malloc(n)
+#define dma_free(p)   free(p)
+#endif
+
 //
 // Timer
 //

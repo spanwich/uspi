@@ -29,6 +29,8 @@
 #include <uspi/macros.h>
 #include <uspi/assert.h>
 
+void *memcpy (void *, const void *, unsigned long);
+
 #define ARM_IRQ_USB		9		// for ConnectInterrupt()
 
 #define DEVICE_ID_USB_HCD	3		// for SetPowerStateOn()
@@ -136,6 +138,8 @@ boolean DWHCIDeviceInitialize (TDWHCIDevice *pThis)
 	
 	ConnectInterrupt (ARM_IRQ_USB, DWHCIDeviceInterruptHandler, pThis);
 
+	LogWrite (FromDWHCI, LOG_DEBUG, "AHBConfig read=0x%x", DWHCIRegisterGet (&AHBConfig));
+	LogWrite (FromDWHCI, LOG_DEBUG, "Starting InitCore...");
 	if (!DWHCIDeviceInitCore (pThis))
 	{
 		LogWrite (FromDWHCI, LOG_ERROR, "Cannot initialize core");
@@ -143,9 +147,11 @@ boolean DWHCIDeviceInitialize (TDWHCIDevice *pThis)
 		_DWHCIRegister (&VendorId);
 		return FALSE;
 	}
-	
+	LogWrite (FromDWHCI, LOG_DEBUG, "InitCore done");
+
 	DWHCIDeviceEnableGlobalInterrupts (pThis);
-	
+	LogWrite (FromDWHCI, LOG_DEBUG, "Global interrupts enabled, starting InitHost...");
+
 	if (!DWHCIDeviceInitHost (pThis))
 	{
 		LogWrite (FromDWHCI, LOG_ERROR, "Cannot initialize host");
@@ -153,6 +159,7 @@ boolean DWHCIDeviceInitialize (TDWHCIDevice *pThis)
 		_DWHCIRegister (&VendorId);
 		return FALSE;
 	}
+	LogWrite (FromDWHCI, LOG_DEBUG, "InitHost done, enabling root port...");
 
 	// The following calls will fail if there is no device or no supported device connected
 	// to root port. This is not an error because the system may run without an USB device.
@@ -164,6 +171,7 @@ boolean DWHCIDeviceInitialize (TDWHCIDevice *pThis)
 		_DWHCIRegister (&VendorId);
 		return TRUE;
 	}
+	LogWrite (FromDWHCI, LOG_DEBUG, "EnableRootPort returned TRUE, initializing root port...");
 
 	if (!DWHCIRootPortInitialize (&pThis->m_RootPort))
 	{
@@ -228,16 +236,34 @@ int DWHCIDeviceControlMessage (TDWHCIDevice *pThis, TUSBEndpoint *pEndpoint,
 {
 	assert (pThis != 0);
 
-	TSetupData SetupData ALIGN (4);		// DMA buffer
+	/* Allocate SetupData from heap (DMA pool on seL4) so the DWC OTG
+	 * DMA engine can access it via a valid bus address. The original
+	 * stack allocation doesn't have a known physical address on seL4. */
+	TSetupData *pSetupData = (TSetupData *) dma_malloc (sizeof (TSetupData));
+	assert (pSetupData != 0);
 
-	SetupData.bmRequestType = ucRequestType;
-	SetupData.bRequest      = ucRequest;
-	SetupData.wValue	= usValue;
-	SetupData.wIndex	= usIndex;
-	SetupData.wLength	= usDataSize;
+	pSetupData->bmRequestType = ucRequestType;
+	pSetupData->bRequest      = ucRequest;
+	pSetupData->wValue	= usValue;
+	pSetupData->wIndex	= usIndex;
+	pSetupData->wLength	= usDataSize;
+
+	/* Bounce pData through DMA pool so BUS_ADDRESS() works.
+	 * Same pattern as the pSetupData fix above — stack/caller
+	 * buffers are not in the DMA pool on seL4. */
+	void *pDMAData = 0;
+	if (usDataSize > 0 && pData != 0)
+	{
+		pDMAData = dma_malloc (usDataSize);
+		assert (pDMAData != 0);
+		if (!(ucRequestType & REQUEST_IN))
+		{
+			memcpy (pDMAData, pData, usDataSize);
+		}
+	}
 
 	TUSBRequest URB;
-	USBRequest (&URB, pEndpoint, pData, usDataSize, &SetupData);
+	USBRequest (&URB, pEndpoint, pDMAData ? pDMAData : pData, usDataSize, pSetupData);
 
 	int nResult = -1;
 
@@ -245,8 +271,19 @@ int DWHCIDeviceControlMessage (TDWHCIDevice *pThis, TUSBEndpoint *pEndpoint,
 	{
 		nResult = USBRequestGetResultLength (&URB);
 	}
-	
+
+	if (pDMAData != 0 && (ucRequestType & REQUEST_IN) && nResult > 0)
+	{
+		memcpy (pData, pDMAData, nResult);
+	}
+
 	_USBRequest (&URB);
+
+	dma_free (pSetupData);
+	if (pDMAData != 0)
+	{
+		dma_free (pDMAData);
+	}
 
 	return nResult;
 }
@@ -506,24 +543,31 @@ boolean DWHCIDeviceEnableRootPort (TDWHCIDevice *pThis)
 {
 	assert (pThis != 0);
 
+	LogWrite (FromDWHCI, LOG_DEBUG, "EnableRootPort: checking CONNECT bit...");
+
 	TDWHCIRegister HostPort;
 	DWHCIRegister (&HostPort, DWHCI_HOST_PORT);
 	if (!DWHCIDeviceWaitForBit (pThis, &HostPort, DWHCI_HOST_PORT_CONNECT, TRUE, 20))
 	{
+		LogWrite (FromDWHCI, LOG_DEBUG, "EnableRootPort: CONNECT timeout (no device)");
 		_DWHCIRegister (&HostPort);
 
 		return FALSE;
 	}
-	
+
+	LogWrite (FromDWHCI, LOG_DEBUG, "EnableRootPort: CONNECT detected, port=0x%x",
+		  DWHCIRegisterGet (&HostPort));
 	MsDelay (100);			// see USB 2.0 spec
 
+	LogWrite (FromDWHCI, LOG_DEBUG, "EnableRootPort: asserting reset...");
 	DWHCIRegisterRead (&HostPort);
 	DWHCIRegisterAnd (&HostPort, ~DWHCI_HOST_PORT_DEFAULT_MASK);
 	DWHCIRegisterOr (&HostPort, DWHCI_HOST_PORT_RESET);
 	DWHCIRegisterWrite (&HostPort);
-	
+
 	MsDelay (50);			// see USB 2.0 spec (tDRSTR)
 
+	LogWrite (FromDWHCI, LOG_DEBUG, "EnableRootPort: deasserting reset...");
 	DWHCIRegisterRead (&HostPort);
 	DWHCIRegisterAnd (&HostPort, ~DWHCI_HOST_PORT_DEFAULT_MASK);
 	DWHCIRegisterAnd (&HostPort, ~DWHCI_HOST_PORT_RESET);
@@ -531,6 +575,10 @@ boolean DWHCIDeviceEnableRootPort (TDWHCIDevice *pThis)
 
 	// normally 10ms, seems to be too short for some devices
 	MsDelay (20);			// see USB 2.0 spec (tRSTRCY)
+
+	DWHCIRegisterRead (&HostPort);
+	LogWrite (FromDWHCI, LOG_DEBUG, "EnableRootPort: complete, port=0x%x",
+		  DWHCIRegisterGet (&HostPort));
 
 	_DWHCIRegister (&HostPort);
 
@@ -541,29 +589,37 @@ boolean DWHCIDeviceReset (TDWHCIDevice *pThis)
 {
 	assert (pThis != 0);
 
+	LogWrite (FromDWHCI, LOG_DEBUG, "Reset: waiting for AHB idle...");
+
 	TDWHCIRegister Reset;
 	DWHCIRegister2 (&Reset, DWHCI_CORE_RESET, 0);
-	
+
 	// wait for AHB master IDLE state
 	if (!DWHCIDeviceWaitForBit (pThis, &Reset, DWHCI_CORE_RESET_AHB_IDLE, TRUE, 100))
 	{
+		LogWrite (FromDWHCI, LOG_ERROR, "Reset: AHB idle timeout");
 		_DWHCIRegister (&Reset);
 
 		return FALSE;
 	}
-	
+
+	LogWrite (FromDWHCI, LOG_DEBUG, "Reset: AHB idle OK, soft reset...");
+
 	// core soft reset
 	DWHCIRegisterOr (&Reset, DWHCI_CORE_RESET_SOFT_RESET);
 	DWHCIRegisterWrite (&Reset);
 
 	if (!DWHCIDeviceWaitForBit (pThis, &Reset, DWHCI_CORE_RESET_SOFT_RESET, FALSE, 10))
 	{
+		LogWrite (FromDWHCI, LOG_ERROR, "Reset: soft reset timeout");
 		_DWHCIRegister (&Reset);
 
 		return FALSE;
 	}
-	
+
+	LogWrite (FromDWHCI, LOG_DEBUG, "Reset: soft reset OK, waiting 100ms...");
 	MsDelay (100);
+	LogWrite (FromDWHCI, LOG_DEBUG, "Reset: done");
 
 	_DWHCIRegister (&Reset);
 
@@ -704,6 +760,10 @@ boolean DWHCIDeviceTransferStage (TDWHCIDevice *pThis, TUSBRequest *pURB, boolea
 	assert (pThis != 0);
 
 	assert (pURB != 0);
+
+	LogWrite (FromDWHCI, LOG_DEBUG, "TransferStage: bIn=%d bStatus=%d bufLen=%u",
+		  bIn, bStatusStage, USBRequestGetBufLen (pURB));
+
 	USBRequestSetCompletionRoutine (pURB, DWHCIDeviceCompletionRoutine, 0, pThis);
 
 	assert (!pThis->m_bWaiting);
@@ -716,10 +776,28 @@ boolean DWHCIDeviceTransferStage (TDWHCIDevice *pThis, TUSBRequest *pURB, boolea
 		return FALSE;
 	}
 
+	LogWrite (FromDWHCI, LOG_DEBUG, "TransferStage: spinning on m_bWaiting...");
+
+	unsigned nSpinCount = 0;
 	while (pThis->m_bWaiting)
 	{
-		// do nothing
+		/* seL4/CAmkES: yield to let the IRQ handler thread run.
+		 * On bare metal this was a pure spin with async IRQs;
+		 * on seL4 the IRQ thread needs the CPU to dispatch. */
+		extern void uspi_platform_yield(void);
+		uspi_platform_yield();
+
+		if (++nSpinCount >= 500000)
+		{
+			LogWrite (FromDWHCI, LOG_ERROR,
+				  "TransferStage: timeout after %u iterations, aborting", nSpinCount);
+			pThis->m_bWaiting = FALSE;
+			return FALSE;
+		}
 	}
+
+	LogWrite (FromDWHCI, LOG_DEBUG, "TransferStage: complete, status=%d",
+		  USBRequestGetStatus (pURB));
 
 	return USBRequestGetStatus (pURB);
 }
@@ -840,9 +918,13 @@ void DWHCIDeviceStartChannel (TDWHCIDevice *pThis, TDWHCITransferStageData *pSta
 	DWHCIRegisterWrite (&TransferSize);
 
 	// set DMA address
+	u32 nDMAVA = DWHCITransferStageDataGetDMAAddress (pStageData);
+	u32 nDMABus = BUS_ADDRESS (nDMAVA);
+	LogWrite (FromDWHCI, LOG_DEBUG, "StartChannel: ch%u DMA VA=0x%x bus=0x%x bytes=%u",
+		  nChannel, nDMAVA, nDMABus,
+		  DWHCITransferStageDataGetBytesToTransfer (pStageData));
 	TDWHCIRegister DMAAddress;
-	DWHCIRegister2 (&DMAAddress, DWHCI_HOST_CHAN_DMA_ADDR (nChannel),
-			BUS_ADDRESS (DWHCITransferStageDataGetDMAAddress (pStageData)));
+	DWHCIRegister2 (&DMAAddress, DWHCI_HOST_CHAN_DMA_ADDR (nChannel), nDMABus);
 	DWHCIRegisterWrite (&DMAAddress);
 
 	uspi_CleanAndInvalidateDataCacheRange (DWHCITransferStageDataGetDMAAddress (pStageData),
@@ -1156,6 +1238,8 @@ void DWHCIDeviceInterruptHandler (void *pParam)
 	TDWHCIRegister IntStatus;
 	DWHCIRegister (&IntStatus, DWHCI_CORE_INT_STAT);
 	DWHCIRegisterRead (&IntStatus);
+
+	LogWrite (FromDWHCI, LOG_DEBUG, "IRQ: IntStatus=0x%x", DWHCIRegisterGet (&IntStatus));
 
 	if (DWHCIRegisterGet (&IntStatus) & DWHCI_CORE_INT_STAT_HC_INTR)
 	{

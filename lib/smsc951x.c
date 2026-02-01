@@ -143,8 +143,11 @@ void SMSC951xDevice (TSMSC951xDevice *pThis, TUSBFunction *pDevice)
 	pThis->m_pEndpointBulkOut = 0;
 	pThis->m_pTxBuffer = 0;
 
-	pThis->m_pTxBuffer = malloc (FRAME_BUFFER_SIZE);
+	pThis->m_pTxBuffer = dma_malloc (FRAME_BUFFER_SIZE);
 	assert (pThis->m_pTxBuffer != 0);
+
+	pThis->m_pRxBuffer = dma_malloc (FRAME_BUFFER_SIZE);
+	assert (pThis->m_pRxBuffer != 0);
 }
 
 void _SMSC951xDevice (TSMSC951xDevice *pThis)
@@ -153,17 +156,23 @@ void _SMSC951xDevice (TSMSC951xDevice *pThis)
 
 	if (pThis->m_pTxBuffer != 0)
 	{
-		free (pThis->m_pTxBuffer);
+		dma_free (pThis->m_pTxBuffer);
 		pThis->m_pTxBuffer = 0;
 	}
-	
+
+	if (pThis->m_pRxBuffer != 0)
+	{
+		dma_free (pThis->m_pRxBuffer);
+		pThis->m_pRxBuffer = 0;
+	}
+
 	if (pThis->m_pEndpointBulkOut != 0)
 	{
 		_USBEndpoint (pThis->m_pEndpointBulkOut);
 		free (pThis->m_pEndpointBulkOut);
 		pThis->m_pEndpointBulkOut = 0;
 	}
-	
+
 	if (pThis->m_pEndpointBulkIn != 0)
 	{
 		_USBEndpoint (pThis->m_pEndpointBulkIn);
@@ -339,8 +348,9 @@ boolean SMSC951xDeviceReceiveFrame (TSMSC951xDevice *pThis, void *pBuffer, unsig
 
 	assert (pThis->m_pEndpointBulkIn != 0);
 	assert (pBuffer != 0);
+	assert (pThis->m_pRxBuffer != 0);
 	TUSBRequest URB;
-	USBRequest (&URB, pThis->m_pEndpointBulkIn, pBuffer, FRAME_BUFFER_SIZE, 0);
+	USBRequest (&URB, pThis->m_pEndpointBulkIn, pThis->m_pRxBuffer, FRAME_BUFFER_SIZE, 0);
 
 	if (!DWHCIDeviceSubmitBlockingRequest (USBFunctionGetHost (&pThis->m_USBFunction), &URB))
 	{
@@ -356,6 +366,8 @@ boolean SMSC951xDeviceReceiveFrame (TSMSC951xDevice *pThis, void *pBuffer, unsig
 
 		return FALSE;
 	}
+
+	memcpy (pBuffer, pThis->m_pRxBuffer, nResultLength);
 
 	u32 nRxStatus = *(u32 *) pBuffer;
 	if (nRxStatus & RX_STS_ERROR)
