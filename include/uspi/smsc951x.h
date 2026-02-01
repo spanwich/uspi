@@ -38,6 +38,7 @@ typedef struct TSMSC951xDevice
 	TMACAddress m_MACAddress;
 
 	u8 *m_pTxBuffer;
+	u8 *m_pRxBuffer;
 }
 TSMSC951xDevice;
 

@@ -37,6 +37,9 @@ void DWHCITransferStageData (TDWHCITransferStageData *pThis, unsigned nChannel, 
 	pThis->m_nTransactionStatus = 0;
 	pThis->m_bFrameSchedulerUsed = FALSE;
 
+	pThis->m_pTempBuffer = (u32 *) dma_malloc (sizeof (u32));
+	assert (pThis->m_pTempBuffer != 0);
+
 	assert (pThis->m_pURB != 0);
 
 	pThis->m_pEndpoint = USBRequestGetEndpoint (pURB);
@@ -86,7 +89,7 @@ void DWHCITransferStageData (TDWHCITransferStageData *pThis, unsigned nChannel, 
 	}
 	else
 	{
-		pThis->m_pBufferPointer = &pThis->m_TempBuffer;
+		pThis->m_pBufferPointer = pThis->m_pTempBuffer;
 
 		pThis->m_nTransferSize = 0;
 		pThis->m_nBytesPerTransaction = 0;
@@ -130,6 +133,12 @@ void _DWHCITransferStageData (TDWHCITransferStageData *pThis)
 	if (pThis->m_bFrameSchedulerUsed)
 	{
 		pThis->m_FrameScheduler.Base._DWHCIFrameScheduler (&pThis->m_FrameScheduler.Base);
+	}
+
+	if (pThis->m_pTempBuffer != 0)
+	{
+		dma_free (pThis->m_pTempBuffer);
+		pThis->m_pTempBuffer = 0;
 	}
 
 	pThis->m_pBufferPointer = 0;

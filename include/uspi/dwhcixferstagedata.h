@@ -60,7 +60,7 @@ typedef struct TDWHCITransferStageData
 	unsigned	 m_nSubState;
 	u32		 m_nTransactionStatus;
 
-	u32		 m_TempBuffer ALIGN (4);	// DMA buffer
+	u32		*m_pTempBuffer;			// DMA buffer (dma_malloc'd)
 	void		*m_pBufferPointer;
 
 	boolean		 m_bFrameSchedulerUsed;

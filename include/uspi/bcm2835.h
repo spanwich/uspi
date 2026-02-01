@@ -22,10 +22,13 @@
 
 #include <uspios.h>
 
+// Allow override from build system (e.g., CAmkES MMIO remapping)
+#ifndef ARM_IO_BASE
 #if RASPPI == 1
 #define ARM_IO_BASE		0x20000000
 #else
 #define ARM_IO_BASE		0x3F000000
+#endif
 #endif
 
 #define GPU_IO_BASE		0x7E000000
@@ -43,9 +46,16 @@
 	#define GPU_MEM_BASE	GPU_UNCACHED_BASE
 #endif
 
-// Convert physical ARM address into bus address
-// (does even work, if a bus address is provided already)
+// Convert address to GPU bus address.
+// On bare metal: phys → bus (strip top bits, add GPU_MEM_BASE).
+// On seL4/CAmkES: the address is a VA; uspi_va_to_bus_address()
+// translates VA → PA via camkes_dma_get_paddr(), then PA → bus.
+#ifdef SEL4_CAMKES
+extern unsigned int uspi_va_to_bus_address(unsigned int va);
+#define BUS_ADDRESS(addr)	uspi_va_to_bus_address((unsigned int)(addr))
+#else
 #define BUS_ADDRESS(phys)	(((phys) & ~0xC0000000) | GPU_MEM_BASE)
+#endif
 
 //
 // USB Host Controller

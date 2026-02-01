@@ -38,6 +38,7 @@ typedef struct TLAN7800Device
 	TMACAddress m_MACAddress;
 
 	u8 *m_pTxBuffer;
+	u8 *m_pRxBuffer;
 }
 TLAN7800Device;
 
