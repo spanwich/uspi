@@ -69,8 +69,13 @@ void dma_free (void *pBlock);
 //
 // Timer
 //
-void MsDelay (unsigned nMilliSeconds);	
+void MsDelay (unsigned nMilliSeconds);
 void usDelay (unsigned nMicroSeconds);
+
+// Millisecond timestamp (seL4/CAmkES: reads ARM generic timer)
+#ifdef SEL4_CAMKES
+unsigned int GetTicksMs(void);
+#endif
 
 #ifndef AARCH64
 	typedef unsigned TKernelTimerHandle;
